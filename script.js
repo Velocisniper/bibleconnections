@@ -312,8 +312,8 @@ async function startBoardGeneration() {
         document.getElementById("setup-screen").style.display = "none";
         document.getElementById("game-screen").style.display = "flex";
 
-        // Setup Anchors Header Elements
-        const anchors = Object.values(boardCategories).map(w => w[0].toUpperCase());
+        // Setup Anchors Header Elements (Uses sorted chronological references)
+        const anchors = sortedRefs.map(ref => boardCategories[ref][0].toUpperCase());
         document.getElementById("anchors-hint").textContent = `Anchors: ${anchors.join(", ")}`;
         document.getElementById("msg-label").textContent = "";
         document.getElementById("lives-label").textContent = `Lives: ${"❤️ ".repeat(lives)}`;
@@ -339,7 +339,12 @@ function renderGrid() {
         if (selectedWords.includes(word)) {
             btn.classList.add("selected");
         }
-        btn.textContent = word.toUpperCase();
+        // --- Injects a break point if the word is longer than 8 characters ---
+        let textToDisplay = word.toUpperCase(); 
+        if (textToDisplay.length > 8) {
+            textToDisplay = textToDisplay.slice(0, 5) + '\u00AD' + textToDisplay.slice(5);
+        }
+        btn.textContent = textToDisplay;
         btn.addEventListener("click", () => toggleWord(word));
         gridFrame.appendChild(btn);
     });
@@ -503,14 +508,24 @@ function endGame(win) {
                 solvedCategories.push(ref);
             }
         });
+        
         renderSolvedCategories();
         renderGrid();
+
+        // Visually lock and dim the remaining grid beneath the answers
+        const grid = document.getElementById("grid-frame");
+        if (grid) {
+            grid.style.pointerEvents = "none";
+            grid.style.opacity = "0.5";
+        }
     }
 
     // Transform setup components for clean "Play Again" access loop execution
     const ctrlFrame = document.querySelector(".ctrl-frame");
-    ctrlFrame.innerHTML = `<button id="play-again-btn" class="ctk-btn primary-btn" style="width:200px;">Play Again</button>`;
-    document.getElementById("play-again-btn").addEventListener("click", () => {
-        location.reload();
-    });
+    if (ctrlFrame) {
+        ctrlFrame.innerHTML = `<button id="play-again-btn" class="ctk-btn primary-btn" style="width:200px;">Play Again</button>`;
+        document.getElementById("play-again-btn").addEventListener("click", () => {
+            location.reload();
+        });
+    }
 }

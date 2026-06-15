@@ -240,3 +240,20 @@ h2 {
     font-size: 13px;
 }
 .zoom-btn:hover { background-color: #444; }
+/* --- Fluid Grid Controls (Triggers whenever the window gets narrow) --- */
+@media (max-width: 650px) {
+    #grid-frame {
+        gap: 6px; /* Tighter gaps when small */
+    }
+
+    .grid-btn {
+        height: auto !important;     /* Unlocks the rigid desktop height */
+        aspect-ratio: 1 / 1;        /* Forces the boxes to become perfectly square */
+        font-size: 14px;            /* Slightly drops base font size so words fit */
+        padding: 4px;
+        
+        /* Forces text to wrap and hyphenate if it hits the wall */
+        overflow-wrap: break-word;
+        word-wrap: break-word;
+    }
+}
