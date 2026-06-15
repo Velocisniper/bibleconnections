@@ -107,6 +107,31 @@ function setupEventListeners() {
     document.getElementById("submit-btn").addEventListener("click", submitGuess);
     document.getElementById("zoom-in-btn").addEventListener("click", () => adjustZoom(0.1));
     document.getElementById("zoom-out-btn").addEventListener("click", () => adjustZoom(-0.1));
+
+    // --- NEW: Auto-zoom out on mobile/square aspect ---
+    const mediaQuery = window.matchMedia("(max-width: 650px)");
+    
+    function handleScreenChange(e) {
+        if (e.matches) {
+            zoomLevel = 0.7; // Automatically zoom out all the way (equivalent to 3 clicks)
+        } else {
+            zoomLevel = 1.0; // Reset to default on wider desktop screens
+        }
+        
+        // Apply the zoom visually
+        document.documentElement.style.setProperty('--zoom', zoomLevel);
+        
+        // Re-render elements so the font scaling math applies cleanly
+        if (allWords.length > 0 || solvedCategories.length > 0) {
+            renderGrid();
+            renderSolvedCategories();
+        }
+    }
+
+    // Listen for users dragging their window to shrink it
+    mediaQuery.addEventListener("change", handleScreenChange);
+    // Fire once immediately to catch the initial screen size if they loaded on a phone
+    handleScreenChange(mediaQuery);
 }
 
 function showHowToPlay() {
