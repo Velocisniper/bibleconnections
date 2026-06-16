@@ -61,6 +61,7 @@ const STOP_WORDS = new Set([
 ]);
 
 const CATEGORY_COLORS = ["#f9df6d", "#a0c35a", "#b0c4ef", "#ba81c5"];
+const CATEGORY_EMOJIS = ["🟨", "🟩", "🟦", "🟪"];
 
 // --- GAME STATE variables ---
 let translation = "ESV";
@@ -70,6 +71,7 @@ let zoomLevel = 1.0;
 let versePool = {};
 let boardCategories = {};
 let categoryColorMap = {};
+let wordToColorIndex = {}; 
 let allWords = [];
 let selectedWords = [];
 let solvedCategories = [];
@@ -77,15 +79,20 @@ let pastGuesses = new Set();
 let lives = 7;
 let isGameOver = false;
 
+// --- DAILY STATE Variables ---
+let randomFunc = Math.random; 
+let isDailyMode = false;
+let dailyDayNumber = 0;
+let guessHistoryColors = []; 
+let jsonCache = {}; 
+
 // --- INITIALIZATION ---
-// We remove the DOMContentLoaded wrapper so it runs immediately
 console.log("🔌 Script successfully loaded and connected to HTML!");
 
 populateBookDropdown();
 setupEventListeners();
 
 function populateBookDropdown() {
-    console.log("📚 Populating book dropdown menu...");
     const bookSelect = document.getElementById("book-select");
     BIBLE_BOOKS.forEach(book => {
         const opt = document.createElement("option");
@@ -96,41 +103,44 @@ function populateBookDropdown() {
 }
 
 function setupEventListeners() {
-    console.log("️ Clicking listeners activated!");
     document.getElementById("generate-btn").addEventListener("click", () => {
-        console.log(" Target acquired: GENERATE BOARD button clicked!");
+        isDailyMode = false;
+        randomFunc = Math.random; 
         startBoardGeneration();
     });
+    
     document.getElementById("how-to-play-btn").addEventListener("click", showHowToPlay);
+    
+    // --- INJECT DAILY GAME BUTTON ---
+    const howToPlayBtn = document.getElementById("how-to-play-btn");
+    
+    if (howToPlayBtn) {
+        const dailyBtn = document.createElement("button");
+        dailyBtn.id = "daily-game-btn";
+        dailyBtn.className = "ctk-btn primary-btn";
+        dailyBtn.textContent = "Play Daily Game";
+        dailyBtn.style.marginTop = "10px";
+        
+        howToPlayBtn.insertAdjacentElement('afterend', dailyBtn);
+        dailyBtn.addEventListener("click", startDailyGame);
+    }
+
     document.getElementById("shuffle-btn").addEventListener("click", shuffleBoard);
     document.getElementById("deselect-btn").addEventListener("click", deselectAll);
     document.getElementById("submit-btn").addEventListener("click", submitGuess);
     document.getElementById("zoom-in-btn").addEventListener("click", () => adjustZoom(0.1));
     document.getElementById("zoom-out-btn").addEventListener("click", () => adjustZoom(-0.1));
 
-    // --- NEW: Auto-zoom out on mobile/square aspect ---
     const mediaQuery = window.matchMedia("(max-width: 650px)");
-    
     function handleScreenChange(e) {
-        if (e.matches) {
-            zoomLevel = 0.7; // Automatically zoom out all the way (equivalent to 3 clicks)
-        } else {
-            zoomLevel = 1.0; // Reset to default on wider desktop screens
-        }
-        
-        // Apply the zoom visually
+        zoomLevel = e.matches ? 0.7 : 1.0;
         document.documentElement.style.setProperty('--zoom', zoomLevel);
-        
-        // Re-render elements so the font scaling math applies cleanly
         if (allWords.length > 0 || solvedCategories.length > 0) {
             renderGrid();
             renderSolvedCategories();
         }
     }
-
-    // Listen for users dragging their window to shrink it
     mediaQuery.addEventListener("change", handleScreenChange);
-    // Fire once immediately to catch the initial screen size if they loaded on a phone
     handleScreenChange(mediaQuery);
 }
 
@@ -166,9 +176,7 @@ function round(value, decimals) {
 function getVerseSortKey(ref) {
     try {
         let bookName = ref;
-        let chapNum = 0;
-        let verseNum = 0;
-
+        let chapNum = 0, verseNum = 0;
         if (ref.includes(":")) {
             const parts = ref.split(":");
             verseNum = parseInt(parts[1].replace(/\D/g, '')) || 0;
@@ -193,8 +201,60 @@ function sortReferencesChronologically(refs) {
     });
 }
 
+// --- FIXED TITLE UPDATE LOGIC (NOW USING ID) ---
+function updateGameTitle() {
+    const suffix = isDailyMode ? `(Daily: ${bookChoice})` : `(${bookChoice})`;
+    const fullTitle = `Bible Connections ${suffix}`;
+    
+    // Update the browser tab
+    document.title = fullTitle;
+    
+    // Directly target the exact ID we just added to your HTML
+    const gameTitleEl = document.getElementById("game-title");
+    if (gameTitleEl) {
+        // Keeping it strictly uppercase so it matches your site's aesthetic
+        gameTitleEl.textContent = fullTitle.toUpperCase();
+    }
+}
+
+// --- DETERMINISTIC RNG ---
+function cyrb128(str) {
+    let h1 = 1779033703, h2 = 3144134277, h3 = 1013904242, h4 = 2773480762;
+    for (let i = 0, k; i < str.length; i++) {
+        k = str.charCodeAt(i);
+        h1 = h2 ^ Math.imul(h1 ^ k, 597399067);
+        h2 = h3 ^ Math.imul(h2 ^ k, 2869860233);
+        h3 = h4 ^ Math.imul(h3 ^ k, 951274213);
+        h4 = h1 ^ Math.imul(h4 ^ k, 2716044179);
+    }
+    h1 = Math.imul(h3 ^ (h1 >>> 18), 597399067);
+    h2 = Math.imul(h4 ^ (h2 >>> 22), 2869860233);
+    h3 = Math.imul(h1 ^ (h3 >>> 17), 951274213);
+    h4 = Math.imul(h2 ^ (h4 >>> 19), 2716044179);
+    return [(h1^h2^h3^h4)>>>0, (h2^h1)>>>0, (h3^h1)>>>0, (h4^h1)>>>0];
+}
+
+function mulberry32(a) {
+    return function() {
+      var t = a += 0x6D2B79F5;
+      t = Math.imul(t ^ t >>> 15, t | 1);
+      t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+      return ((t ^ t >>> 14) >>> 0) / 4294967296;
+    }
+}
+
+function deterministicShuffle(array) {
+    let currentIndex = array.length, randomIndex;
+    while (currentIndex != 0) {
+        randomIndex = Math.floor(randomFunc() * currentIndex);
+        currentIndex--;
+        [array[currentIndex], array[randomIndex]] = [array[randomIndex], array[currentIndex]];
+    }
+    return array;
+}
+
 // --- ASYNC BIBLE DATA PROCESSING ---
-async function fetchVersePool(poolSize = 15) {
+async function fetchVersePool(poolSize = 25) {
     let verses = {};
     let validBooks = [];
 
@@ -205,23 +265,29 @@ async function fetchVersePool(poolSize = 15) {
 
     for (let i = 0; i < poolSize; i++) {
         try {
-            const randomBook = validBooks[Math.floor(Math.random() * validBooks.length)];
+            const randomBook = validBooks[Math.floor(randomFunc() * validBooks.length)];
             const [bName, maxChapters, testament, abbrev] = randomBook;
 
-            // Direct relative network fetch matching your folder design
             const filePath = `Bible_Data/${testament}/${abbrev}/${translation}.json`;
-            const response = await fetch(filePath);
-            if (!response.ok) continue;
             
-            const data = await response.json();
+            let data;
+            if (jsonCache[filePath]) {
+                data = jsonCache[filePath];
+            } else {
+                const response = await fetch(filePath);
+                if (!response.ok) continue;
+                data = await response.json();
+                jsonCache[filePath] = data;
+            }
+            
             const chapters = data.text || [];
             if (chapters.length === 0) continue;
 
-            const randomChapter = chapters[Math.floor(Math.random() * chapters.length)];
+            const randomChapter = chapters[Math.floor(randomFunc() * chapters.length)];
             const versesInChap = randomChapter.text || [];
             if (versesInChap.length === 0) continue;
 
-            const randomVerse = versesInChap[Math.floor(Math.random() * versesInChap.length)];
+            const randomVerse = versesInChap[Math.floor(randomFunc() * versesInChap.length)];
             
             let rawName = String(randomChapter.name || "");
             let chapNum = rawName.split(' ').pop().replace(/\D/g, '') || "1";
@@ -236,14 +302,11 @@ async function fetchVersePool(poolSize = 15) {
             if (!verses[key]) {
                 verses[key] = text;
             }
-        } catch (err) {
-            // Quiet fail to continue loop safely
-        }
+        } catch (err) { }
     }
     return verses;
 }
 
-// Helper simulating python's itertools.combinations
 function getCombinations(array, k) {
     let result = [];
     function helper(start, combo) {
@@ -261,23 +324,51 @@ function getCombinations(array, k) {
     return result;
 }
 
-async function startBoardGeneration() {
-    translation = document.getElementById("translation-select").value;
-    bookChoice = document.getElementById("book-select").value;
+function startDailyGame() {
+    isDailyMode = true;
+    translation = document.getElementById("translation-select") ? document.getElementById("translation-select").value : "ESV";
+    
+    const today = new Date();
+    const epoch = new Date("2024-01-01T00:00:00");
+    dailyDayNumber = Math.floor((today.getTime() - epoch.getTime()) / (1000 * 60 * 60 * 24));
+    
+    startBoardGeneration();
+}
 
-    // Show loading text using system generation feedback mechanics
+async function startBoardGeneration() {
+    if (!isDailyMode) {
+        translation = document.getElementById("translation-select").value;
+        bookChoice = document.getElementById("book-select").value;
+        randomFunc = Math.random; 
+    }
+
     const setupScreen = document.getElementById("setup-screen");
     setupScreen.innerHTML = `<h1>Searching the Scriptures...</h1><p style='color: var(--text-muted); font-size:18px;'>Generating your board...</p>`;
 
     let attempts = 0;
-    const maxAttempts = 15;
+    const maxAttempts = 20; 
     let success = false;
 
     while (attempts < maxAttempts && !success) {
         attempts++;
-        versePool = await fetchVersePool(15);
+        
+        if (isDailyMode) {
+            const seedStr = `Daily-${dailyDayNumber}-Attempt-${attempts}`;
+            const seed = cyrb128(seedStr)[0];
+            randomFunc = mulberry32(seed);
+
+            const validDailyBooks = BIBLE_BOOKS.filter(b => b[1] >= 4);
+            const randomBook = validDailyBooks[Math.floor(randomFunc() * validDailyBooks.length)];
+            bookChoice = randomBook[0];
+        }
+        
+        updateGameTitle();
+
+        versePool = await fetchVersePool(25); 
         const poolKeys = Object.keys(versePool);
         
+        if (poolKeys.length < 4) continue;
+
         let verseWords = {};
         poolKeys.forEach(k => { verseWords[k] = getWords(versePool[k]); });
 
@@ -300,8 +391,6 @@ async function startBoardGeneration() {
                     validBoard = false;
                     break;
                 }
-
-                // Sort by descending character length to isolate meaningful keywords
                 uniqueToK.sort((a, b) => b.length - a.length);
                 tempBoard[k] = uniqueToK.slice(0, 4);
             }
@@ -317,27 +406,28 @@ async function startBoardGeneration() {
     if (success) {
         allWords = [];
         Object.values(boardCategories).forEach(words => allWords.push(...words));
-        // Shuffle engine
-        allWords.sort(() => Math.random() - 0.5);
+        allWords = deterministicShuffle(allWords);
 
         const sortedRefs = sortReferencesChronologically(Object.keys(boardCategories));
         categoryColorMap = {};
+        wordToColorIndex = {}; 
+        
         sortedRefs.forEach((ref, idx) => {
-            categoryColorMap[ref] = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+            const colorIndex = idx % CATEGORY_COLORS.length;
+            categoryColorMap[ref] = CATEGORY_COLORS[colorIndex];
+            boardCategories[ref].forEach(w => wordToColorIndex[w] = colorIndex);
         });
 
-        // Reset global configurations
         lives = 7;
         solvedCategories = [];
         selectedWords = [];
+        guessHistoryColors = [];
         pastGuesses.clear();
         isGameOver = false;
 
-        // Visual UI Transition to active play container
         document.getElementById("setup-screen").style.display = "none";
         document.getElementById("game-screen").style.display = "flex";
 
-        // Setup Anchors Header Elements (Uses sorted chronological references)
         const anchors = sortedRefs.map(ref => boardCategories[ref][0].toUpperCase());
         document.getElementById("anchors-hint").textContent = `Anchors: ${anchors.join(", ")}`;
         document.getElementById("msg-label").textContent = "";
@@ -346,8 +436,8 @@ async function startBoardGeneration() {
         renderGrid();
         renderSolvedCategories();
     } else {
-        alert("Could not generate a valid board. Please pick another book combination or use Entire Bible!");
-        location.reload(); // Hard reload back to original selection
+        alert("Could not generate a valid board. Please check your network connection or choose a larger book!");
+        location.reload(); 
     }
 }
 
@@ -356,15 +446,14 @@ function renderGrid() {
     const gridFrame = document.getElementById("grid-frame");
     gridFrame.innerHTML = "";
 
-    if (isGameOver && allWords.length === 0) return;
+    // Fix: If the game is over, stop here so the grid remains completely empty
+    if (isGameOver) return; 
 
     allWords.forEach(word => {
         const btn = document.createElement("button");
         btn.className = "grid-btn";
-        if (selectedWords.includes(word)) {
-            btn.classList.add("selected");
-        }
-        // --- Injects a break point if the word is longer than 8 characters ---
+        if (selectedWords.includes(word)) btn.classList.add("selected");
+        
         let textToDisplay = word.toUpperCase(); 
         if (textToDisplay.length > 8) {
             textToDisplay = textToDisplay.slice(0, 5) + '\u00AD' + textToDisplay.slice(5);
@@ -377,13 +466,10 @@ function renderGrid() {
 
 function toggleWord(word) {
     if (isGameOver) return;
-
     if (selectedWords.includes(word)) {
         selectedWords = selectedWords.filter(w => w !== word);
     } else {
-        if (selectedWords.length < 4) {
-            selectedWords.push(word);
-        }
+        if (selectedWords.length < 4) selectedWords.push(word);
     }
 
     document.getElementById("deselect-btn").disabled = selectedWords.length === 0;
@@ -401,7 +487,7 @@ function deselectAll() {
 
 function shuffleBoard() {
     if (isGameOver) return;
-    allWords.sort(() => Math.random() - 0.5);
+    allWords = deterministicShuffle(allWords);
     renderGrid();
 }
 
@@ -410,8 +496,6 @@ function submitGuess() {
     if (selectedWords.length !== 4 || isGameOver) return;
 
     const currentGuessSet = new Set(selectedWords);
-    
-    // Create unique identity string sorting for tracking sets accurately
     const guessFrozen = [...currentGuessSet].sort().join(",");
     const msgLabel = document.getElementById("msg-label");
 
@@ -423,6 +507,9 @@ function submitGuess() {
     }
     pastGuesses.add(guessFrozen);
 
+    const guessColors = selectedWords.map(w => wordToColorIndex[w]);
+    guessHistoryColors.push(guessColors);
+
     let matchFound = false;
 
     for (let [ref, words] of Object.entries(boardCategories)) {
@@ -433,7 +520,6 @@ function submitGuess() {
             matchFound = true;
             solvedCategories.push(ref);
             
-            // Remove guessed words entirely out of the active grid layout array
             allWords = allWords.filter(w => !currentGuessSet.has(w));
             selectedWords = [];
 
@@ -443,9 +529,7 @@ function submitGuess() {
             renderSolvedCategories();
             renderGrid();
 
-            if (allWords.length === 0) {
-                endGame(true);
-            }
+            if (allWords.length === 0) endGame(true);
             break;
         }
     }
@@ -478,9 +562,7 @@ function submitGuess() {
             msgLabel.className = "msg-text status-red";
         }
 
-        if (lives <= 0) {
-            endGame(false);
-        }
+        if (lives <= 0) endGame(false);
     }
 
     document.getElementById("deselect-btn").disabled = true;
@@ -497,7 +579,6 @@ function renderSolvedCategories() {
         const words = boardCategories[ref];
         let originalText = versePool[ref];
 
-        // Highlight matching solution words directly in verse block
         words.forEach(w => {
             const regex = new RegExp(`\\b${w}\\b`, 'gi');
             originalText = originalText.replace(regex, match => `<strong>${match}</strong>`);
@@ -527,30 +608,71 @@ function endGame(win) {
         msgLabel.textContent = "Game Over. Better luck next time!";
         msgLabel.className = "msg-text status-red";
         
-        // Expose remaining mystery solutions upon systemic failures
-        Object.keys(boardCategories).forEach(ref => {
-            if (!solvedCategories.includes(ref)) {
-                solvedCategories.push(ref);
-            }
+        // Fix: Sort the remaining categories chronologically (Yellow -> Purple) before revealing
+        const sortedRefs = sortReferencesChronologically(Object.keys(boardCategories));
+        sortedRefs.forEach(ref => {
+            if (!solvedCategories.includes(ref)) solvedCategories.push(ref);
         });
         
         renderSolvedCategories();
-        renderGrid();
-
-        // Visually lock and dim the remaining grid beneath the answers
-        const grid = document.getElementById("grid-frame");
-        if (grid) {
-            grid.style.pointerEvents = "none";
-            grid.style.opacity = "0.5";
-        }
     }
 
-    // Transform setup components for clean "Play Again" access loop execution
+    // Clear the remaining words and re-render to make the buttons disappear
+    allWords = [];
+    renderGrid();
+
     const ctrlFrame = document.querySelector(".ctrl-frame");
     if (ctrlFrame) {
         ctrlFrame.innerHTML = `<button id="play-again-btn" class="ctk-btn primary-btn" style="width:200px;">Play Again</button>`;
+        
+        if (isDailyMode) {
+            const shareBtn = document.createElement("button");
+            shareBtn.id = "share-btn";
+            shareBtn.className = "ctk-btn primary-btn"; 
+            shareBtn.style.width = "200px";
+            shareBtn.style.marginLeft = "10px";
+            shareBtn.textContent = "Share Results";
+            shareBtn.addEventListener("click", shareResults);
+            ctrlFrame.appendChild(shareBtn);
+        }
+
         document.getElementById("play-again-btn").addEventListener("click", () => {
             location.reload();
         });
     }
+}
+
+// --- SHARE RESULTS LOGIC ---
+function shareResults() {
+    let emojiText = `Daily Bible Connections #${dailyDayNumber} - ${bookChoice}\n\n`;
+    
+    guessHistoryColors.forEach(rowColors => {
+        emojiText += rowColors.map(colorIndex => CATEGORY_EMOJIS[colorIndex]).join("") + "\n";
+    });
+
+    // Simple check to see if the user is on a mobile device
+    const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
+    // Only use the native share menu on mobile devices that support it
+    if (isMobile && navigator.share) {
+        navigator.share({
+            title: 'Bible Connections',
+            text: emojiText
+        }).catch((error) => {
+            copyToClipboardFallback(emojiText);
+        });
+    } else {
+        // On desktop (or unsupported devices), skip the clunky menu and go straight to clipboard
+        copyToClipboardFallback(emojiText);
+    }
+}
+
+function copyToClipboardFallback(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        const msgLabel = document.getElementById("msg-label");
+        msgLabel.textContent = "Copied to clipboard!";
+        msgLabel.className = "msg-text status-green";
+    }).catch(err => {
+        alert("Failed to copy results. You can manually select and copy:\n\n" + text);
+    });
 }
