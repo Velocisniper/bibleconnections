@@ -90,7 +90,20 @@ let jsonCache = {};
 console.log("🔌 Script successfully loaded and connected to HTML!");
 
 populateBookDropdown();
+restoreSavedSettings();
 setupEventListeners();
+
+function restoreSavedSettings() {
+    const savedTranslation = localStorage.getItem("bibleConn_translation");
+    const savedBookChoice = localStorage.getItem("bibleConn_bookChoice");
+    
+    if (savedTranslation && document.getElementById("translation-select")) {
+        document.getElementById("translation-select").value = savedTranslation;
+    }
+    if (savedBookChoice && document.getElementById("book-select")) {
+        document.getElementById("book-select").value = savedBookChoice;
+    }
+}
 
 function populateBookDropdown() {
     const bookSelect = document.getElementById("book-select");
@@ -347,6 +360,9 @@ async function startBoardGeneration() {
         bookChoice = document.getElementById("book-select").value;
         randomFunc = Math.random; 
     }
+
+    localStorage.setItem("bibleConn_translation", translation);
+    localStorage.setItem("bibleConn_bookChoice", bookChoice);
 
     const setupScreen = document.getElementById("setup-screen");
     setupScreen.innerHTML = `<h1>Searching the Scriptures...</h1><p style='color: var(--text-muted); font-size:18px;'>Generating your board...</p>`;

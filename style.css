@@ -185,7 +185,8 @@ h2 {
     text-transform: uppercase;
     transition: background-color 0.1s;
 }
-.grid-btn:hover { background-color: #404040; }
+@media (hover: hover) {
+.grid-btn:hover { background-color: #404040; } }
 .grid-btn.selected { background-color: var(--btn-selected); }
 
 /* Bottom Control Row */
