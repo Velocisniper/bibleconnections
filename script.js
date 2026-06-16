@@ -164,7 +164,8 @@ function showHowToPlay() {
         "• Select 4 words and tap 'Submit' to guess.\n" +
         "• You have 7 lives to solve the entire board.\n" +
         "• Anchors represent a guaranteed word for each hidden verse.\n" +
-        "• Box colors mark Bible position (Yellow = earliest, Purple = latest)."
+        "• Box colors mark Bible position (Yellow = earliest, Purple = latest).\n" +
+        "- Created by Matthew Kearney"
     );
 }
 

@@ -11,3 +11,5 @@ The library of bible translations was sourced from https://github.com/bobuk/holy
 Copyright (c) 2016, Grigory Bakunov
 Thanks to the contributers who put that together!
 I do not own any of the Bible Translations used.
+
+Created by Matthew Kearney. Thanks for playing!
