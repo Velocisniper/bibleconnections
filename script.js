@@ -643,8 +643,17 @@ function endGame(win) {
 }
 
 // --- SHARE RESULTS LOGIC ---
+// --- SHARE RESULTS LOGIC ---
 function shareResults() {
-    let emojiText = `Daily Bible Connections #${dailyDayNumber} - ${bookChoice}\n\n`;
+    // Grab today's date and format it compactly (e.g., "6/15/2026")
+    const todayString = new Date().toLocaleDateString('en-US', { 
+        year: 'numeric', 
+        month: 'numeric', 
+        day: 'numeric' 
+    });
+
+    // Update the share text to use the compact date
+    let emojiText = `Daily Bible Connections - ${todayString} - ${bookChoice}\n\n`;
     
     guessHistoryColors.forEach(rowColors => {
         emojiText += rowColors.map(colorIndex => CATEGORY_EMOJIS[colorIndex]).join("") + "\n";
