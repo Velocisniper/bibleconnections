@@ -328,9 +328,15 @@ function startDailyGame() {
     isDailyMode = true;
     translation = document.getElementById("translation-select") ? document.getElementById("translation-select").value : "ESV";
     
-    const today = new Date();
-    const epoch = new Date("2024-01-01T00:00:00");
-    dailyDayNumber = Math.floor((today.getTime() - epoch.getTime()) / (1000 * 60 * 60 * 24));
+    // Grab the current local date
+    const now = new Date();
+    const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    
+    // Set a strict local epoch (January 1, 2024)
+    const epochLocal = new Date(2024, 0, 1);
+    
+    // Calculate days passed using local midnight intervals
+    dailyDayNumber = Math.floor((todayLocal.getTime() - epochLocal.getTime()) / (1000 * 60 * 60 * 24));
     
     startBoardGeneration();
 }
