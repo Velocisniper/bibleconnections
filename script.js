@@ -49,7 +49,7 @@ const STOP_WORDS = new Set([
     "speak", "do", "make", "go", "come", "see", "hear", "give", "take", "know", "call", "bring", 
     "let", "put", "find", "tell", "keep", "live", "die", "stand", "fall", "love", "hate", "save", 
     "destroy", "build", "send", "walk", "follow", "lead", "teach", "believe", "pray", "praise", 
-    "worship", "bless", "curse", "rule", "judge", "fight", "kill", "eat", "drink", "sleep", "rise", 
+    "worship", "bless", "curse", "rule", "judge", "fight", "kill", "eat", "drink", "sleep", "rose", 
     "sit", "look", "listen", "command", "remember", "forget", "forgive", "sin", "repent", "hope", 
     "trust", "fear", "wait", "show", "hide", "reveal", "cover", "open", "close", "turn", "return", 
     "leave", "remain", "depart", "good", "evil", "great", "small", "holy", "righteous", "wicked", 
@@ -124,9 +124,7 @@ function setupEventListeners() {
     
     document.getElementById("how-to-play-btn").addEventListener("click", showHowToPlay);
     
-    // --- INJECT DAILY GAME BUTTON ---
     const howToPlayBtn = document.getElementById("how-to-play-btn");
-    
     if (howToPlayBtn) {
         const dailyBtn = document.createElement("button");
         dailyBtn.id = "daily-game-btn";
@@ -165,6 +163,7 @@ function showHowToPlay() {
         "• You have 7 lives to solve the entire board.\n" +
         "• Anchors represent a guaranteed word for each hidden verse.\n" +
         "• Box colors mark Bible position (Yellow = earliest, Purple = latest).\n" +
+        "• Feel free to use a Bible, but don't use a search tool \n \n" +
         "- Created by Matthew Kearney"
     );
 }
@@ -193,10 +192,13 @@ function getVerseSortKey(ref) {
         let chapNum = 0, verseNum = 0;
         if (ref.includes(":")) {
             const parts = ref.split(":");
-            verseNum = parseInt(parts[1].replace(/\D/g, '')) || 0;
-            const bookChap = parts[0].lastIndexOf(" ");
-            bookName = parts[0].substring(0, bookChap).trim();
-            chapNum = parseInt(parts[0].substring(bookChap).trim()) || 0;
+            const totalParts = parts.length;
+            verseNum = parseInt(parts[totalParts - 1].replace(/\D/g, '')) || 0;
+            
+            const bookChapStr = parts.slice(0, totalParts - 1).join(":");
+            const bookChap = bookChapStr.lastIndexOf(" ");
+            bookName = bookChapStr.substring(0, bookChap).trim();
+            chapNum = parseInt(bookChapStr.substring(bookChap).trim()) || 0;
         }
         const bookIdx = BIBLE_BOOKS.findIndex(b => b[0] === bookName);
         return [bookIdx !== -1 ? bookIdx : 999, chapNum, verseNum];
@@ -215,18 +217,14 @@ function sortReferencesChronologically(refs) {
     });
 }
 
-// --- FIXED TITLE UPDATE LOGIC (NOW USING ID) ---
 function updateGameTitle() {
     const suffix = isDailyMode ? `(Daily: ${bookChoice})` : `(${bookChoice})`;
     const fullTitle = `Bible Connections ${suffix}`;
     
-    // Update the browser tab
     document.title = fullTitle;
     
-    // Directly target the exact ID we just added to your HTML
     const gameTitleEl = document.getElementById("game-title");
     if (gameTitleEl) {
-        // Keeping it strictly uppercase so it matches your site's aesthetic
         gameTitleEl.textContent = fullTitle.toUpperCase();
     }
 }
@@ -267,23 +265,29 @@ function deterministicShuffle(array) {
     return array;
 }
 
-// --- ASYNC BIBLE DATA PROCESSING ---
-async function fetchVersePool(poolSize = 25) {
-    let verses = {};
-    let validBooks = [];
+// --- BULK FETCHING SCOUTING ENGINE ---
+async function fetchVersePool() {
+    let selectedBookData = BIBLE_BOOKS.find(b => b[0] === bookChoice);
+    // Use complex filtering only if the selected scope isn't broad and has > 4 chapters
+    const useComplexFiltering = (bookChoice !== "Entire Bible" && 
+                                 bookChoice !== "Old Testament" && 
+                                 bookChoice !== "New Testament" && 
+                                 selectedBookData && selectedBookData[1] <= 4) ? false : true;
 
+    let validBooks = [];
     if (bookChoice === "Entire Bible") validBooks = BIBLE_BOOKS;
     else if (bookChoice === "Old Testament") validBooks = BIBLE_BOOKS.filter(b => b[2] === "OT");
     else if (bookChoice === "New Testament") validBooks = BIBLE_BOOKS.filter(b => b[2] === "NT");
     else validBooks = BIBLE_BOOKS.filter(b => b[0] === bookChoice);
 
-    for (let i = 0; i < poolSize; i++) {
-        try {
-            const randomBook = validBooks[Math.floor(randomFunc() * validBooks.length)];
-            const [bName, maxChapters, testament, abbrev] = randomBook;
+    let basePool = [];
 
-            const filePath = `Bible_Data/${testament}/${abbrev}/${translation}.json`;
-            
+    // Gather ALL available verses from chosen books
+    for (let book of validBooks) {
+        const [bName, maxChapters, testament, abbrev] = book;
+        const filePath = `Bible_Data/${testament}/${abbrev}/${translation}.json`;
+        
+        try {
             let data;
             if (jsonCache[filePath]) {
                 data = jsonCache[filePath];
@@ -293,32 +297,97 @@ async function fetchVersePool(poolSize = 25) {
                 data = await response.json();
                 jsonCache[filePath] = data;
             }
-            
+
             const chapters = data.text || [];
-            if (chapters.length === 0) continue;
+            chapters.forEach(chapter => {
+                let rawName = String(chapter.name || "");
+                let chapNum = rawName.split(' ').pop().replace(/\D/g, '') || "1";
+                const verses = chapter.text || [];
+                
+                verses.forEach(verse => {
+                    let verseNum = String(verse.ID || "?");
+                    let key = `${bName} ${chapNum}:${verseNum}`;
+                    let text = (verse.text || "")
+                        .replace(/—/g, ' ').replace(/–/g, ' ')
+                        .replace(/<[^>]+>/g, '')
+                        .replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
 
-            const randomChapter = chapters[Math.floor(randomFunc() * chapters.length)];
-            const versesInChap = randomChapter.text || [];
-            if (versesInChap.length === 0) continue;
-
-            const randomVerse = versesInChap[Math.floor(randomFunc() * versesInChap.length)];
-            
-            let rawName = String(randomChapter.name || "");
-            let chapNum = rawName.split(' ').pop().replace(/\D/g, '') || "1";
-            let verseNum = String(randomVerse.ID || "?");
-            let key = `${bName} ${chapNum}:${verseNum}`;
-
-            let text = (randomVerse.text || "")
-                .replace(/—/g, ' ').replace(/–/g, ' ')
-                .replace(/<[^>]+>/g, '')
-                .replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
-
-            if (!verses[key]) {
-                verses[key] = text;
-            }
-        } catch (err) { }
+                    basePool.push({
+                        key: key,
+                        text: text,
+                        chapterIdentifier: `${bName} ${chapNum}`
+                    });
+                });
+            });
+        } catch (e) {}
     }
-    return verses;
+
+    if (basePool.length === 0) return {};
+
+    // 1. Shuffle the ENTIRE master list deterministically using the session seed
+    basePool = deterministicShuffle(basePool);
+
+    // If it's a small book or broad scope, skip complex filtering to preserve validity
+    if (!useComplexFiltering) {
+        let finalVersesPool = {};
+        const finalSelection = basePool.slice(0, 25);
+        finalSelection.forEach(v => {
+            finalVersesPool[v.key] = v.text;
+        });
+        return finalVersesPool;
+    }
+
+    // 2. Slice out a random subset (the "scout pool") to ensure natural variety
+    const scoutPoolSize = Math.min(50, basePool.length);
+    let potentialVersesList = basePool.slice(0, scoutPoolSize);
+
+    // 3. Cross-examine words ONLY within this random subset
+    const wordChapterMap = {};
+    potentialVersesList.forEach(v => {
+        const words = getWords(v.text);
+        words.forEach(word => {
+            if (!wordChapterMap[word]) wordChapterMap[word] = new Set();
+            wordChapterMap[word].add(v.chapterIdentifier);
+        });
+    });
+
+    // 4. Score chapter insulation values and isolate maximum character lengths
+    potentialVersesList = potentialVersesList.map(v => {
+        const words = getWords(v.text);
+        let score = 0;
+        let maxLength = 0;
+        
+        words.forEach(w => {
+            if (wordChapterMap[w] && wordChapterMap[w].size === 1) score++;
+            if (w.length > maxLength) maxLength = w.length;
+        });
+        
+        return { ...v, score, maxLength };
+    });
+
+    // 5. Sort this specific subset by insulation weight, falling back strictly to word length rules
+    potentialVersesList.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+        return b.maxLength - a.maxLength;
+    });
+
+    // 6. Extract the final 25 verse candidates from this random batch
+    let finalSelection = potentialVersesList.slice(0, 25);
+
+    // 7. Inject 3 random wildcard verses to ensure a bit of unpredictability
+    let remainingVerses = basePool.filter(v => !finalSelection.includes(v));
+    if (remainingVerses.length > 0) {
+        deterministicShuffle(remainingVerses);
+        let wildcards = remainingVerses.slice(0, 3);
+        finalSelection = finalSelection.concat(wildcards);
+    }
+
+    let finalVersesPool = {};
+    finalSelection.forEach(v => {
+        finalVersesPool[v.key] = v.text;
+    });
+
+    return finalVersesPool;
 }
 
 function getCombinations(array, k) {
@@ -342,14 +411,10 @@ function startDailyGame() {
     isDailyMode = true;
     translation = document.getElementById("translation-select") ? document.getElementById("translation-select").value : "ESV";
     
-    // Grab the current local date
     const now = new Date();
     const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    
-    // Set a strict local epoch (January 1, 2024)
     const epochLocal = new Date(2024, 0, 1);
     
-    // Calculate days passed using local midnight intervals
     dailyDayNumber = Math.floor((todayLocal.getTime() - epochLocal.getTime()) / (1000 * 60 * 60 * 24));
     
     startBoardGeneration();
@@ -380,17 +445,20 @@ async function startBoardGeneration() {
             const seed = cyrb128(seedStr)[0];
             randomFunc = mulberry32(seed);
 
-            const validDailyBooks = BIBLE_BOOKS.filter(b => b[1] >= 4);
-            const randomBook = validDailyBooks[Math.floor(randomFunc() * validDailyBooks.length)];
+            // Daily Challenge now selects from all BIBLE_BOOKS, ignoring chapter counts
+            const randomBook = BIBLE_BOOKS[Math.floor(randomFunc() * BIBLE_BOOKS.length)];
             bookChoice = randomBook[0];
         }
         
         updateGameTitle();
 
-        versePool = await fetchVersePool(25); 
-        const poolKeys = Object.keys(versePool);
+        versePool = await fetchVersePool(); 
+        let poolKeys = Object.keys(versePool);
         
         if (poolKeys.length < 4) continue;
+
+        // Shuffle the 25 (or 28) keys BEFORE generating combinations.
+        poolKeys = deterministicShuffle(poolKeys);
 
         let verseWords = {};
         poolKeys.forEach(k => { verseWords[k] = getWords(versePool[k]); });
@@ -425,7 +493,7 @@ async function startBoardGeneration() {
             }
         }
     }
-
+    
     if (success) {
         allWords = [];
         Object.values(boardCategories).forEach(words => allWords.push(...words));
@@ -453,6 +521,7 @@ async function startBoardGeneration() {
 
         const anchors = sortedRefs.map(ref => boardCategories[ref][0].toUpperCase());
         document.getElementById("anchors-hint").textContent = `Anchors: ${anchors.join(", ")}`;
+        
         document.getElementById("msg-label").textContent = "";
         document.getElementById("lives-label").textContent = `Lives: ${"❤️ ".repeat(lives)}`;
         
@@ -463,13 +532,11 @@ async function startBoardGeneration() {
         location.reload(); 
     }
 }
-
 // --- INTERACTIVE LAYOUT RENDERING ---
 function renderGrid() {
     const gridFrame = document.getElementById("grid-frame");
     gridFrame.innerHTML = "";
 
-    // Fix: If the game is over, stop here so the grid remains completely empty
     if (isGameOver) return; 
 
     allWords.forEach(word => {
@@ -631,7 +698,6 @@ function endGame(win) {
         msgLabel.textContent = "Game Over. Better luck next time!";
         msgLabel.className = "msg-text status-red";
         
-        // Fix: Sort the remaining categories chronologically (Yellow -> Purple) before revealing
         const sortedRefs = sortReferencesChronologically(Object.keys(boardCategories));
         sortedRefs.forEach(ref => {
             if (!solvedCategories.includes(ref)) solvedCategories.push(ref);
@@ -640,7 +706,6 @@ function endGame(win) {
         renderSolvedCategories();
     }
 
-    // Clear the remaining words and re-render to make the buttons disappear
     allWords = [];
     renderGrid();
 
@@ -666,26 +731,21 @@ function endGame(win) {
 }
 
 // --- SHARE RESULTS LOGIC ---
-// --- SHARE RESULTS LOGIC ---
 function shareResults() {
-    // Grab today's date and format it compactly (e.g., "6/15/2026")
     const todayString = new Date().toLocaleDateString('en-US', { 
         year: 'numeric', 
         month: 'numeric', 
         day: 'numeric' 
     });
 
-    // Update the share text to use the compact date
     let emojiText = `Daily Bible Connections - ${todayString} - ${bookChoice}\n\n`;
     
     guessHistoryColors.forEach(rowColors => {
         emojiText += rowColors.map(colorIndex => CATEGORY_EMOJIS[colorIndex]).join("") + "\n";
     });
 
-    // Simple check to see if the user is on a mobile device
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
 
-    // Only use the native share menu on mobile devices that support it
     if (isMobile && navigator.share) {
         navigator.share({
             title: 'Bible Connections',
@@ -694,7 +754,6 @@ function shareResults() {
             copyToClipboardFallback(emojiText);
         });
     } else {
-        // On desktop (or unsupported devices), skip the clunky menu and go straight to clipboard
         copyToClipboardFallback(emojiText);
     }
 }
