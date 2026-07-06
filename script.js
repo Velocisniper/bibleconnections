@@ -57,7 +57,7 @@ const STOP_WORDS = new Set([
     "foolish", "strong", "weak", "rich", "poor", "full", "empty", "living", "dead", "pure", 
     "defiled", "perfect", "broken", "beautiful", "light", "dark", "sweet", "bitter", "right", 
     "wrong", "just", "unjust", "faithful", "mighty", "humble", "proud", "glad", "sad", "angry", 
-    "blind", "whole", "sick"
+    "blind", "whole", "sick", "spoke", "said", "saying"
 ]);
 
 const CATEGORY_COLORS = ["#f9df6d", "#a0c35a", "#b0c4ef", "#ba81c5"];
@@ -66,7 +66,7 @@ const CATEGORY_EMOJIS = ["🟨", "🟩", "🟦", "🟪"];
 // --- GAME STATE variables ---
 let translation = "ESV";
 let bookChoice = "Entire Bible";
-let zoomLevel = 1.0;
+let zoomLevel = 0.9;
 
 let versePool = {};
 let boardCategories = {};
@@ -85,6 +85,7 @@ let isDailyMode = false;
 let dailyDayNumber = 0;
 let guessHistoryColors = []; 
 let jsonCache = {}; 
+let globalChapterWords = {};
 
 // --- INITIALIZATION ---
 console.log("🔌 Script successfully loaded and connected to HTML!");
@@ -107,6 +108,18 @@ function restoreSavedSettings() {
 
 function populateBookDropdown() {
     const bookSelect = document.getElementById("book-select");
+    if (!bookSelect) return;
+    
+    bookSelect.innerHTML = ""; 
+
+    const broadOptions = ["Entire Bible", "Old Testament", "New Testament"];
+    broadOptions.forEach(optVal => {
+        const opt = document.createElement("option");
+        opt.value = optVal;
+        opt.textContent = optVal;
+        bookSelect.appendChild(opt);
+    });
+
     BIBLE_BOOKS.forEach(book => {
         const opt = document.createElement("option");
         opt.value = book[0];
@@ -144,7 +157,7 @@ function setupEventListeners() {
 
     const mediaQuery = window.matchMedia("(max-width: 650px)");
     function handleScreenChange(e) {
-        zoomLevel = e.matches ? 0.7 : 1.0;
+        zoomLevel = e.matches ? 0.6 : 0.9;
         document.documentElement.style.setProperty('--zoom', zoomLevel);
         if (allWords.length > 0 || solvedCategories.length > 0) {
             renderGrid();
@@ -176,7 +189,7 @@ function getWords(text) {
 }
 
 function adjustZoom(amount) {
-    zoomLevel = Math.max(0.7, Math.min(2.0, round(zoomLevel + amount, 1)));
+    zoomLevel = Math.max(0.4, Math.min(2.0, round(zoomLevel + amount, 1)));
     document.documentElement.style.setProperty('--zoom', zoomLevel);
     renderGrid();
     renderSolvedCategories();
@@ -268,7 +281,6 @@ function deterministicShuffle(array) {
 // --- BULK FETCHING SCOUTING ENGINE ---
 async function fetchVersePool() {
     let selectedBookData = BIBLE_BOOKS.find(b => b[0] === bookChoice);
-    // Use complex filtering only if the selected scope isn't broad and has > 4 chapters
     const useComplexFiltering = (bookChoice !== "Entire Bible" && 
                                  bookChoice !== "Old Testament" && 
                                  bookChoice !== "New Testament" && 
@@ -281,8 +293,8 @@ async function fetchVersePool() {
     else validBooks = BIBLE_BOOKS.filter(b => b[0] === bookChoice);
 
     let basePool = [];
+    globalChapterWords = {}; 
 
-    // Gather ALL available verses from chosen books
     for (let book of validBooks) {
         const [bName, maxChapters, testament, abbrev] = book;
         const filePath = `Bible_Data/${testament}/${abbrev}/${translation}.json`;
@@ -312,10 +324,19 @@ async function fetchVersePool() {
                         .replace(/<[^>]+>/g, '')
                         .replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
 
+                    let chapterId = `${bName} ${chapNum}`;
+
+                    if (isDailyMode) {
+                        if (!globalChapterWords[chapterId]) {
+                            globalChapterWords[chapterId] = new Set();
+                        }
+                        getWords(text).forEach(w => globalChapterWords[chapterId].add(w));
+                    }
+
                     basePool.push({
                         key: key,
                         text: text,
-                        chapterIdentifier: `${bName} ${chapNum}`
+                        chapterIdentifier: chapterId
                     });
                 });
             });
@@ -324,10 +345,8 @@ async function fetchVersePool() {
 
     if (basePool.length === 0) return {};
 
-    // 1. Shuffle the ENTIRE master list deterministically using the session seed
     basePool = deterministicShuffle(basePool);
 
-    // If it's a small book or broad scope, skip complex filtering to preserve validity
     if (!useComplexFiltering) {
         let finalVersesPool = {};
         const finalSelection = basePool.slice(0, 25);
@@ -337,11 +356,9 @@ async function fetchVersePool() {
         return finalVersesPool;
     }
 
-    // 2. Slice out a random subset (the "scout pool") to ensure natural variety
     const scoutPoolSize = Math.min(50, basePool.length);
     let potentialVersesList = basePool.slice(0, scoutPoolSize);
 
-    // 3. Cross-examine words ONLY within this random subset
     const wordChapterMap = {};
     potentialVersesList.forEach(v => {
         const words = getWords(v.text);
@@ -351,7 +368,6 @@ async function fetchVersePool() {
         });
     });
 
-    // 4. Score chapter insulation values and isolate maximum character lengths
     potentialVersesList = potentialVersesList.map(v => {
         const words = getWords(v.text);
         let score = 0;
@@ -365,23 +381,12 @@ async function fetchVersePool() {
         return { ...v, score, maxLength };
     });
 
-    // 5. Sort this specific subset by insulation weight, falling back strictly to word length rules
     potentialVersesList.sort((a, b) => {
         if (b.score !== a.score) return b.score - a.score;
         return b.maxLength - a.maxLength;
     });
 
-    // 6. Extract the final 25 verse candidates from this random batch
     let finalSelection = potentialVersesList.slice(0, 25);
-
-    // 7. Inject 3 random wildcard verses to ensure a bit of unpredictability
-    let remainingVerses = basePool.filter(v => !finalSelection.includes(v));
-    if (remainingVerses.length > 0) {
-        deterministicShuffle(remainingVerses);
-        let wildcards = remainingVerses.slice(0, 3);
-        finalSelection = finalSelection.concat(wildcards);
-    }
-
     let finalVersesPool = {};
     finalSelection.forEach(v => {
         finalVersesPool[v.key] = v.text;
@@ -445,9 +450,17 @@ async function startBoardGeneration() {
             const seed = cyrb128(seedStr)[0];
             randomFunc = mulberry32(seed);
 
-            // Daily Challenge now selects from all BIBLE_BOOKS, ignoring chapter counts
-            const randomBook = BIBLE_BOOKS[Math.floor(randomFunc() * BIBLE_BOOKS.length)];
-            bookChoice = randomBook[0];
+            const r = randomFunc();
+            if (r < 0.05) {
+                bookChoice = "Entire Bible";
+            } else if (r < 0.10) {
+                bookChoice = "Old Testament";
+            } else if (r < 0.15) {
+                bookChoice = "New Testament";
+            } else {
+                const randomBook = BIBLE_BOOKS[Math.floor(randomFunc() * BIBLE_BOOKS.length)];
+                bookChoice = randomBook[0];
+            }
         }
         
         updateGameTitle();
@@ -457,7 +470,6 @@ async function startBoardGeneration() {
         
         if (poolKeys.length < 4) continue;
 
-        // Shuffle the 25 (or 28) keys BEFORE generating combinations.
         poolKeys = deterministicShuffle(poolKeys);
 
         let verseWords = {};
@@ -465,23 +477,55 @@ async function startBoardGeneration() {
 
         const combos = getCombinations(poolKeys, 4);
 
+        let selectedBookData = BIBLE_BOOKS.find(b => b[0] === bookChoice);
+        let useComplexFiltering = (bookChoice !== "Entire Bible" && 
+                                   bookChoice !== "Old Testament" && 
+                                   bookChoice !== "New Testament" && 
+                                   selectedBookData && selectedBookData[1] <= 4) ? false : true;
+
         for (let combo of combos) {
             let tempBoard = {};
             let validBoard = true;
+            let puzzleChapters = [];
 
             for (let k of combo) {
+                puzzleChapters.push(k.substring(0, k.lastIndexOf(":")));
+            }
+
+            if (useComplexFiltering) {
+                let uniqueChapters = new Set(puzzleChapters);
+                if (uniqueChapters.size < 4) continue;
+            }
+
+            for (let i = 0; i < combo.length; i++) {
+                let k = combo[i];
+                let chapterId = puzzleChapters[i];
                 let otherWords = new Set();
-                for (let otherK of combo) {
-                    if (k !== otherK) {
-                        verseWords[otherK].forEach(w => otherWords.add(w));
+                
+                if (isDailyMode) {
+                    for (let j = 0; j < puzzleChapters.length; j++) {
+                        if (i !== j) {
+                            let otherChap = puzzleChapters[j];
+                            if (globalChapterWords[otherChap]) {
+                                globalChapterWords[otherChap].forEach(w => otherWords.add(w));
+                            }
+                        }
+                    }
+                } else {
+                    for (let j = 0; j < combo.length; j++) {
+                        if (i !== j) {
+                            verseWords[combo[j]].forEach(w => otherWords.add(w));
+                        }
                     }
                 }
 
                 let uniqueToK = [...verseWords[k]].filter(w => !otherWords.has(w));
+                
                 if (uniqueToK.length < 4) {
                     validBoard = false;
                     break;
                 }
+                
                 uniqueToK.sort((a, b) => b.length - a.length);
                 tempBoard[k] = uniqueToK.slice(0, 4);
             }
