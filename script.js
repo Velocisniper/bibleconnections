@@ -66,7 +66,7 @@ const CATEGORY_EMOJIS = ["🟨", "🟩", "🟦", "🟪"];
 // --- GAME STATE variables ---
 let translation = "ESV";
 let bookChoice = "Entire Bible";
-let zoomLevel = 0.9;
+let zoomLevel = 1.0; // Increased base zoom by 0.1
 
 let versePool = {};
 let boardCategories = {};
@@ -86,6 +86,7 @@ let dailyDayNumber = 0;
 let guessHistoryColors = []; 
 let jsonCache = {}; 
 let globalChapterWords = {};
+let hasFailedDailyBook = false; // Tracks if we had to swap out of a seeded book
 
 // --- INITIALIZATION ---
 console.log("🔌 Script successfully loaded and connected to HTML!");
@@ -131,6 +132,7 @@ function populateBookDropdown() {
 function setupEventListeners() {
     document.getElementById("generate-btn").addEventListener("click", () => {
         isDailyMode = false;
+        hasFailedDailyBook = false;
         randomFunc = Math.random; 
         startBoardGeneration();
     });
@@ -157,7 +159,7 @@ function setupEventListeners() {
 
     const mediaQuery = window.matchMedia("(max-width: 650px)");
     function handleScreenChange(e) {
-        zoomLevel = e.matches ? 0.6 : 0.9;
+        zoomLevel = e.matches ? 0.7 : 1.0; // Increased by 0.1 for both views
         document.documentElement.style.setProperty('--zoom', zoomLevel);
         if (allWords.length > 0 || solvedCategories.length > 0) {
             renderGrid();
@@ -231,7 +233,13 @@ function sortReferencesChronologically(refs) {
 }
 
 function updateGameTitle() {
-    const suffix = isDailyMode ? `(Daily: ${bookChoice})` : `(${bookChoice})`;
+    let suffix = "";
+    if (isDailyMode) {
+        // Toggle square brackets if the script failed on a prior book
+        suffix = hasFailedDailyBook ? `[Daily: ${bookChoice}]` : `(Daily: ${bookChoice})`;
+    } else {
+        suffix = `(${bookChoice})`;
+    }
     const fullTitle = `Bible Connections ${suffix}`;
     
     document.title = fullTitle;
@@ -414,6 +422,7 @@ function getCombinations(array, k) {
 
 function startDailyGame() {
     isDailyMode = true;
+    hasFailedDailyBook = false;
     translation = document.getElementById("translation-select") ? document.getElementById("translation-select").value : "ESV";
     
     const now = new Date();
@@ -438,26 +447,30 @@ async function startBoardGeneration() {
     const setupScreen = document.getElementById("setup-screen");
     setupScreen.innerHTML = `<h1>Searching the Scriptures...</h1><p style='color: var(--text-muted); font-size:18px;'>Generating your board...</p>`;
 
-    let attempts = 0;
-    const maxAttempts = 20; 
     let success = false;
+    let cycleIndex = 0;
+    
+    // In Daily mode, it will try up to 10 different books (cycles) before giving up entirely.
+    const MAX_CYCLES = isDailyMode ? 10 : 1; 
 
-    while (attempts < maxAttempts && !success) {
-        attempts++;
+    while (cycleIndex < MAX_CYCLES && !success) {
+        
+        // If we loop back up here and cycleIndex > 0, it means the previous book failed
+        if (cycleIndex > 0) {
+            hasFailedDailyBook = true;
+        }
         
         if (isDailyMode) {
-            const seedStr = `Daily-${dailyDayNumber}-Attempt-${attempts}`;
-            const seed = cyrb128(seedStr)[0];
+            // Seed generation to lock in ONE book for this specific cycle
+            let seedStr = `Daily-${dailyDayNumber}-BookCycle-${cycleIndex}`;
+            let seed = cyrb128(seedStr)[0];
             randomFunc = mulberry32(seed);
 
             const r = randomFunc();
-            if (r < 0.05) {
-                bookChoice = "Entire Bible";
-            } else if (r < 0.10) {
-                bookChoice = "Old Testament";
-            } else if (r < 0.15) {
-                bookChoice = "New Testament";
-            } else {
+            if (r < 0.05) { bookChoice = "Entire Bible"; }
+            else if (r < 0.10) { bookChoice = "Old Testament"; }
+            else if (r < 0.15) { bookChoice = "New Testament"; }
+            else {
                 const randomBook = BIBLE_BOOKS[Math.floor(randomFunc() * BIBLE_BOOKS.length)];
                 bookChoice = randomBook[0];
             }
@@ -465,77 +478,102 @@ async function startBoardGeneration() {
         
         updateGameTitle();
 
-        versePool = await fetchVersePool(); 
-        let poolKeys = Object.keys(versePool);
-        
-        if (poolKeys.length < 4) continue;
-
-        poolKeys = deterministicShuffle(poolKeys);
-
-        let verseWords = {};
-        poolKeys.forEach(k => { verseWords[k] = getWords(versePool[k]); });
-
-        const combos = getCombinations(poolKeys, 4);
-
-        let selectedBookData = BIBLE_BOOKS.find(b => b[0] === bookChoice);
-        let useComplexFiltering = (bookChoice !== "Entire Bible" && 
-                                   bookChoice !== "Old Testament" && 
-                                   bookChoice !== "New Testament" && 
-                                   selectedBookData && selectedBookData[1] <= 4) ? false : true;
-
-        for (let combo of combos) {
-            let tempBoard = {};
-            let validBoard = true;
-            let puzzleChapters = [];
-
-            for (let k of combo) {
-                puzzleChapters.push(k.substring(0, k.lastIndexOf(":")));
+        // Try 20 attempts on the current book
+        const MAX_ATTEMPTS = 20; 
+        for (let localAttempt = 0; localAttempt < MAX_ATTEMPTS; localAttempt++) {
+            
+            if (isDailyMode) {
+                // Ensure a unique determinable seed per attempt so we fetch a different batch of 25 verses
+                let localSeedStr = `Daily-${dailyDayNumber}-BookCycle-${cycleIndex}-Local-${localAttempt}`;
+                let localSeed = cyrb128(localSeedStr)[0];
+                randomFunc = mulberry32(localSeed);
             }
 
-            if (useComplexFiltering) {
-                let uniqueChapters = new Set(puzzleChapters);
-                if (uniqueChapters.size < 4) continue;
+            versePool = await fetchVersePool(); 
+            let poolKeys = Object.keys(versePool);
+            
+            if (poolKeys.length < 4) {
+                if (isDailyMode) break; // If book is fundamentally too small, skip straight to the next book cycle
+                else continue; 
             }
 
-            for (let i = 0; i < combo.length; i++) {
-                let k = combo[i];
-                let chapterId = puzzleChapters[i];
-                let otherWords = new Set();
-                
-                if (isDailyMode) {
-                    for (let j = 0; j < puzzleChapters.length; j++) {
-                        if (i !== j) {
-                            let otherChap = puzzleChapters[j];
-                            if (globalChapterWords[otherChap]) {
-                                globalChapterWords[otherChap].forEach(w => otherWords.add(w));
+            poolKeys = deterministicShuffle(poolKeys);
+
+            let verseWords = {};
+            poolKeys.forEach(k => { verseWords[k] = getWords(versePool[k]); });
+
+            const combos = getCombinations(poolKeys, 4);
+
+            let selectedBookData = BIBLE_BOOKS.find(b => b[0] === bookChoice);
+            let useComplexFiltering = (bookChoice !== "Entire Bible" && 
+                                       bookChoice !== "Old Testament" && 
+                                       bookChoice !== "New Testament" && 
+                                       selectedBookData && selectedBookData[1] <= 4) ? false : true;
+
+            // In Daily Mode, all 20 attempts use the strict filter.
+            let isStrictFilter = isDailyMode;
+
+            for (let combo of combos) {
+                let tempBoard = {};
+                let validBoard = true;
+                let puzzleChapters = [];
+
+                for (let k of combo) {
+                    puzzleChapters.push(k.substring(0, k.lastIndexOf(":")));
+                }
+
+                if (useComplexFiltering) {
+                    let uniqueChapters = new Set(puzzleChapters);
+                    if (uniqueChapters.size < 4) continue;
+                }
+
+                for (let i = 0; i < combo.length; i++) {
+                    let k = combo[i];
+                    let chapterId = puzzleChapters[i];
+                    let otherWords = new Set();
+                    
+                    if (isStrictFilter) {
+                        for (let j = 0; j < puzzleChapters.length; j++) {
+                            if (i !== j) {
+                                let otherChap = puzzleChapters[j];
+                                if (globalChapterWords[otherChap]) {
+                                    globalChapterWords[otherChap].forEach(w => otherWords.add(w));
+                                }
+                            }
+                        }
+                    } else {
+                        // Standard validation for non-daily mode
+                        for (let j = 0; j < combo.length; j++) {
+                            if (i !== j) {
+                                verseWords[combo[j]].forEach(w => otherWords.add(w));
                             }
                         }
                     }
-                } else {
-                    for (let j = 0; j < combo.length; j++) {
-                        if (i !== j) {
-                            verseWords[combo[j]].forEach(w => otherWords.add(w));
-                        }
+
+                    let uniqueToK = [...verseWords[k]].filter(w => !otherWords.has(w));
+                    
+                    if (uniqueToK.length < 4) {
+                        validBoard = false;
+                        break;
                     }
+                    
+                    uniqueToK.sort((a, b) => b.length - a.length);
+                    tempBoard[k] = uniqueToK.slice(0, 4);
                 }
 
-                let uniqueToK = [...verseWords[k]].filter(w => !otherWords.has(w));
-                
-                if (uniqueToK.length < 4) {
-                    validBoard = false;
+                if (validBoard) {
+                    boardCategories = tempBoard;
+                    success = true;
                     break;
                 }
-                
-                uniqueToK.sort((a, b) => b.length - a.length);
-                tempBoard[k] = uniqueToK.slice(0, 4);
             }
-
-            if (validBoard) {
-                boardCategories = tempBoard;
-                success = true;
-                break;
+            
+            if (success) {
+                break; // Break the local attempts loop
             }
         }
+        
+        cycleIndex++;
     }
     
     if (success) {
@@ -576,6 +614,7 @@ async function startBoardGeneration() {
         location.reload(); 
     }
 }
+
 // --- INTERACTIVE LAYOUT RENDERING ---
 function renderGrid() {
     const gridFrame = document.getElementById("grid-frame");
