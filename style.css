@@ -136,7 +136,7 @@ h2 {
     margin-bottom: 10px;
 }
 
-/* Solved Category Boxes (Locked Height) */
+/* Solved Category Boxes (grow in height if zoomed text needs more room) */
 #solved-frame {
     display: flex;
     flex-direction: column;
@@ -146,7 +146,7 @@ h2 {
 
 .solved-box {
     width: calc(590px * var(--zoom));
-    height: calc(90px * var(--zoom));
+    min-height: calc(90px * var(--zoom));
     border-radius: 6px;
     color: #000000;
     display: flex;
@@ -241,6 +241,7 @@ h2 {
     font-size: 13px;
 }
 .zoom-btn:hover { background-color: #444; }
+
 /* --- Fluid Grid Controls (Triggers whenever the window gets narrow) --- */
 @media (max-width: 650px) {
     #grid-frame {
@@ -249,11 +250,13 @@ h2 {
 
     .grid-btn {
         height: auto !important;     /* Unlocks the rigid desktop height */
-        aspect-ratio: 1 / 1;        /* Forces the boxes to become perfectly square */
-        font-size: 14px;            /* Slightly drops base font size so words fit */
+        aspect-ratio: 1 / 1;         /* Forces the boxes to become perfectly square */
+
+        /* Scales with the zoom buttons: 20px * 0.7 default zoom = 14px */
+        font-size: calc(20px * var(--zoom)) !important;
         padding: 4px;
-        
-        /* Forces text to wrap and hyphenate if it hits the wall */
+
+        /* Forces text to wrap if it hits the wall */
         overflow-wrap: break-word;
         word-wrap: break-word;
     }
