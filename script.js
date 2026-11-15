@@ -66,7 +66,7 @@ const CATEGORY_EMOJIS = ["🟨", "🟩", "🟦", "🟪"];
 // --- GAME STATE variables ---
 let translation = "ESV";
 let bookChoice = "Entire Bible";
-let zoomLevel = 1.0; // Increased base zoom by 0.1
+let zoomLevel = 0.90; // Increased base zoom by 0.1
 
 let versePool = {};
 let boardCategories = {};
@@ -78,6 +78,7 @@ let solvedCategories = [];
 let pastGuesses = new Set();
 let lives = 7;
 let isGameOver = false;
+let gameWon = false;
 
 // --- DAILY STATE Variables ---
 let randomFunc = Math.random; 
@@ -87,6 +88,7 @@ let guessHistoryColors = [];
 let jsonCache = {}; 
 let globalChapterWords = {};
 let hasFailedDailyBook = false; // Tracks if we had to swap out of a seeded book
+let currentHintRef = null; // Verse reference currently shown as a hint
 
 // --- INITIALIZATION ---
 console.log("🔌 Script successfully loaded and connected to HTML!");
@@ -154,6 +156,7 @@ function setupEventListeners() {
     document.getElementById("shuffle-btn").addEventListener("click", shuffleBoard);
     document.getElementById("deselect-btn").addEventListener("click", deselectAll);
     document.getElementById("submit-btn").addEventListener("click", submitGuess);
+    document.getElementById("hint-btn").addEventListener("click", giveHint);
     document.getElementById("zoom-in-btn").addEventListener("click", () => adjustZoom(0.1));
     document.getElementById("zoom-out-btn").addEventListener("click", () => adjustZoom(-0.1));
 
@@ -424,13 +427,22 @@ function startDailyGame() {
     isDailyMode = true;
     hasFailedDailyBook = false;
     translation = document.getElementById("translation-select") ? document.getElementById("translation-select").value : "ESV";
-    
+
     const now = new Date();
     const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const epochLocal = new Date(2024, 0, 1);
-    
+
     dailyDayNumber = Math.floor((todayLocal.getTime() - epochLocal.getTime()) / (1000 * 60 * 60 * 24));
-    
+
+    cleanupOldDailySaves();
+
+    // Resume today's game if one exists (in progress or finished)
+    const saved = loadDailyState();
+    if (saved) {
+        restoreDailyGame(saved);
+        return;
+    }
+
     startBoardGeneration();
 }
 
@@ -438,11 +450,13 @@ async function startBoardGeneration() {
     if (!isDailyMode) {
         translation = document.getElementById("translation-select").value;
         bookChoice = document.getElementById("book-select").value;
-        randomFunc = Math.random; 
-    }
+        randomFunc = Math.random;
 
-    localStorage.setItem("bibleConn_translation", translation);
-    localStorage.setItem("bibleConn_bookChoice", bookChoice);
+        // Only persist settings for regular games, so the daily seeded book
+        // never overwrites the player's chosen dropdown values
+        localStorage.setItem("bibleConn_translation", translation);
+        localStorage.setItem("bibleConn_bookChoice", bookChoice);
+    }
 
     const setupScreen = document.getElementById("setup-screen");
     setupScreen.innerHTML = `<h1>Searching the Scriptures...</h1><p style='color: var(--text-muted); font-size:18px;'>Generating your board...</p>`;
@@ -581,9 +595,7 @@ async function startBoardGeneration() {
         Object.values(boardCategories).forEach(words => allWords.push(...words));
         allWords = deterministicShuffle(allWords);
 
-        const sortedRefs = sortReferencesChronologically(Object.keys(boardCategories));
-        categoryColorMap = {};
-        wordToColorIndex = {}; 
+        const sortedRefs = buildColorMaps();
         
         sortedRefs.forEach((ref, idx) => {
             const colorIndex = idx % CATEGORY_COLORS.length;
@@ -591,11 +603,13 @@ async function startBoardGeneration() {
             boardCategories[ref].forEach(w => wordToColorIndex[w] = colorIndex);
         });
 
+        gameWon = false;    
         lives = 7;
         solvedCategories = [];
         selectedWords = [];
         guessHistoryColors = [];
         pastGuesses.clear();
+        currentHintRef = null;
         isGameOver = false;
 
         document.getElementById("setup-screen").style.display = "none";
@@ -609,11 +623,124 @@ async function startBoardGeneration() {
         
         renderGrid();
         renderSolvedCategories();
+        if (isDailyMode) saveDailyState();  
     } else {
         alert("Could not generate a valid board. Please check your network connection or choose a larger book!");
         location.reload(); 
     }
 }
+
+// --- DAILY SAVE / RESTORE ---
+function getDailySaveKey() {
+    return `bibleConn_daily_${dailyDayNumber}`;
+}
+
+function saveDailyState() {
+    if (!isDailyMode) return;
+    try {
+        // Only keep the 4 verses actually used on this board
+        const savedVerses = {};
+        Object.keys(boardCategories).forEach(ref => {
+            savedVerses[ref] = versePool[ref];
+        });
+
+        const state = {
+            translation,
+            bookChoice,
+            hasFailedDailyBook,
+            boardCategories,
+            versePool: savedVerses,
+            allWords,
+            selectedWords,
+            solvedCategories,
+            pastGuesses: [...pastGuesses],
+            guessHistoryColors,
+            lives,
+            currentHintRef,
+            isGameOver,
+            won: gameWon
+        };
+        localStorage.setItem(getDailySaveKey(), JSON.stringify(state));
+    } catch (e) {
+        console.warn("Could not save daily progress:", e);
+    }
+}
+
+function loadDailyState() {
+    try {
+        const raw = localStorage.getItem(getDailySaveKey());
+        return raw ? JSON.parse(raw) : null;
+    } catch (e) {
+        return null;
+    }
+}
+
+// Removes saves from previous days so localStorage doesn't pile up
+function cleanupOldDailySaves() {
+    try {
+        const current = getDailySaveKey();
+        Object.keys(localStorage)
+            .filter(k => k.startsWith("bibleConn_daily_") && k !== current)
+            .forEach(k => localStorage.removeItem(k));
+    } catch (e) {}
+}
+
+// Shared by new-board generation and restore
+function buildColorMaps() {
+    const sortedRefs = sortReferencesChronologically(Object.keys(boardCategories));
+    categoryColorMap = {};
+    wordToColorIndex = {};
+    sortedRefs.forEach((ref, idx) => {
+        const colorIndex = idx % CATEGORY_COLORS.length;
+        categoryColorMap[ref] = CATEGORY_COLORS[colorIndex];
+        boardCategories[ref].forEach(w => wordToColorIndex[w] = colorIndex);
+    });
+    return sortedRefs;
+}
+
+function restoreDailyGame(state) {
+    isDailyMode = true;
+    randomFunc = Math.random;
+
+    translation = state.translation;
+    bookChoice = state.bookChoice;
+    hasFailedDailyBook = state.hasFailedDailyBook;
+    boardCategories = state.boardCategories;
+    versePool = state.versePool;
+    allWords = state.allWords;
+    selectedWords = state.selectedWords;
+    solvedCategories = state.solvedCategories;
+    pastGuesses = new Set(state.pastGuesses);
+    guessHistoryColors = state.guessHistoryColors;
+    lives = state.lives;
+    isGameOver = state.isGameOver;
+    gameWon = state.won;
+    currentHintRef = state.currentHintRef || null;
+
+    const sortedRefs = buildColorMaps();
+    updateGameTitle();
+
+    document.getElementById("setup-screen").style.display = "none";
+    document.getElementById("game-screen").style.display = "flex";
+
+    const anchors = sortedRefs.map(ref => boardCategories[ref][0].toUpperCase());
+    document.getElementById("anchors-hint").textContent = `Anchors: ${anchors.join(", ")}`;
+    document.getElementById("lives-label").textContent = `Lives: ${"❤️ ".repeat(lives)}`;
+    document.getElementById("msg-label").textContent = "";
+
+    renderSolvedCategories();
+    renderGrid();
+    renderHint();
+
+    if (isGameOver) {
+        showEndMessage();
+        showEndControls();
+    } else {
+        document.getElementById("deselect-btn").disabled = selectedWords.length === 0;
+        document.getElementById("submit-btn").disabled = selectedWords.length !== 4;
+    }
+}
+
 
 // --- INTERACTIVE LAYOUT RENDERING ---
 function renderGrid() {
@@ -632,23 +759,24 @@ function renderGrid() {
             textToDisplay = textToDisplay.slice(0, 5) + '\u00AD' + textToDisplay.slice(5);
         }
         btn.textContent = textToDisplay;
-        btn.addEventListener("click", () => toggleWord(word));
+        btn.addEventListener("click", () => toggleWord(word, btn))
         gridFrame.appendChild(btn);
     });
 }
 
-function toggleWord(word) {
+function toggleWord(word, btn) {
     if (isGameOver) return;
     if (selectedWords.includes(word)) {
         selectedWords = selectedWords.filter(w => w !== word);
-    } else {
-        if (selectedWords.length < 4) selectedWords.push(word);
+        btn.classList.remove("selected");
+    } else if (selectedWords.length < 4) {
+        selectedWords.push(word);
+        btn.classList.add("selected");
     }
-
     document.getElementById("deselect-btn").disabled = selectedWords.length === 0;
     document.getElementById("submit-btn").disabled = selectedWords.length !== 4;
     document.getElementById("msg-label").textContent = "";
-    renderGrid();
+    saveDailyState();
 }
 
 function deselectAll() {
@@ -656,12 +784,14 @@ function deselectAll() {
     document.getElementById("deselect-btn").disabled = true;
     document.getElementById("submit-btn").disabled = true;
     renderGrid();
+    saveDailyState();
 }
 
 function shuffleBoard() {
     if (isGameOver) return;
     allWords = deterministicShuffle(allWords);
     renderGrid();
+    saveDailyState();
 }
 
 // --- CORE GUESS LOGIC MECHANICS ---
@@ -701,6 +831,7 @@ function submitGuess() {
 
             renderSolvedCategories();
             renderGrid();
+            renderHint();
 
             if (allWords.length === 0) endGame(true);
             break;
@@ -738,8 +869,49 @@ function submitGuess() {
         if (lives <= 0) endGame(false);
     }
 
-    document.getElementById("deselect-btn").disabled = true;
-    document.getElementById("submit-btn").disabled = true;
+    document.getElementById("deselect-btn")?.setAttribute("disabled", "");
+    document.getElementById("submit-btn")?.setAttribute("disabled", "");
+    saveDailyState();
+}
+
+// --- HINT SYSTEM ---
+function giveHint() {
+    if (isGameOver) return;
+
+    const remaining = Object.keys(boardCategories).filter(ref => !solvedCategories.includes(ref));
+    if (remaining.length === 0) return;
+
+    // Nothing new to reveal if the only unsolved verse is already being shown
+    if (remaining.length === 1 && currentHintRef === remaining[0]) return;
+
+    // Prefer a different verse than the one currently displayed
+    let choices = remaining.filter(ref => ref !== currentHintRef);
+    if (choices.length === 0) choices = remaining;
+    currentHintRef = choices[Math.floor(Math.random() * choices.length)];
+
+    guessHistoryColors.push("hint"); // Shows up as its own 💡 row when sharing
+
+    renderHint();
+    saveDailyState();
+}
+
+function renderHint() {
+    const hintEl = document.getElementById("hint-area");
+    if (!hintEl) return;
+
+    if (isGameOver || !currentHintRef || solvedCategories.includes(currentHintRef)) {
+        currentHintRef = null;
+        hintEl.textContent = "";
+        return;
+    }
+
+    let text = versePool[currentHintRef] || "";
+    allWords.forEach(w => {
+        const regex = new RegExp(`\\b${w}\\b`, 'gi');
+        text = text.replace(regex, "_____");
+    });
+
+    hintEl.textContent = "💡 " + text;
 }
 
 // --- RENDER SOLVED CATEGORIES WITH RICH HIGHLIGHTING ---
@@ -772,59 +944,75 @@ function renderSolvedCategories() {
 
 function endGame(win) {
     isGameOver = true;
-    const msgLabel = document.getElementById("msg-label");
+    gameWon = win;
 
-    if (win) {
+    if (!win) {
+        const sortedRefs = sortReferencesChronologically(Object.keys(boardCategories));
+        sortedRefs.forEach(ref => {
+            if (!solvedCategories.includes(ref)) solvedCategories.push(ref);
+        });
+    }
+
+    allWords = [];
+    selectedWords = [];
+
+    showEndMessage();
+    renderSolvedCategories();
+    renderGrid();
+    renderHint();
+    showEndControls();
+    saveDailyState();
+}
+
+function showEndMessage() {
+    const msgLabel = document.getElementById("msg-label");
+    if (gameWon) {
         msgLabel.textContent = "Nice job! You solved the board!";
         msgLabel.className = "msg-text status-green";
     } else {
         msgLabel.textContent = "Game Over. Better luck next time!";
         msgLabel.className = "msg-text status-red";
-        
-        const sortedRefs = sortReferencesChronologically(Object.keys(boardCategories));
-        sortedRefs.forEach(ref => {
-            if (!solvedCategories.includes(ref)) solvedCategories.push(ref);
-        });
-        
-        renderSolvedCategories();
     }
+}
 
-    allWords = [];
-    renderGrid();
-
+function showEndControls() {
     const ctrlFrame = document.querySelector(".ctrl-frame");
-    if (ctrlFrame) {
-        ctrlFrame.innerHTML = `<button id="play-again-btn" class="ctk-btn primary-btn" style="width:200px;">Play Again</button>`;
-        
-        if (isDailyMode) {
-            const shareBtn = document.createElement("button");
-            shareBtn.id = "share-btn";
-            shareBtn.className = "ctk-btn primary-btn"; 
-            shareBtn.style.width = "200px";
-            shareBtn.style.marginLeft = "10px";
-            shareBtn.textContent = "Share Results";
-            shareBtn.addEventListener("click", shareResults);
-            ctrlFrame.appendChild(shareBtn);
-        }
+    if (!ctrlFrame) return;
 
-        document.getElementById("play-again-btn").addEventListener("click", () => {
-            location.reload();
-        });
+    ctrlFrame.innerHTML = `<button id="play-again-btn" class="ctk-btn primary-btn" style="width:200px;">Play Again</button>`;
+
+    if (isDailyMode) {
+        const shareBtn = document.createElement("button");
+        shareBtn.id = "share-btn";
+        shareBtn.className = "ctk-btn primary-btn";
+        shareBtn.style.width = "200px";
+        shareBtn.style.marginLeft = "10px";
+        shareBtn.textContent = "Share Results";
+        shareBtn.addEventListener("click", shareResults);
+        ctrlFrame.appendChild(shareBtn);
     }
+
+    document.getElementById("play-again-btn").addEventListener("click", () => {
+        location.reload();
+    });
 }
 
 // --- SHARE RESULTS LOGIC ---
 function shareResults() {
-    const todayString = new Date().toLocaleDateString('en-US', { 
-        year: 'numeric', 
-        month: 'numeric', 
-        day: 'numeric' 
+    const todayString = new Date().toLocaleDateString('en-US', {
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric'
     });
 
-    let emojiText = `Daily Bible Connections - ${todayString} - ${bookChoice}\n\n`;
-    
+    let emojiText = `Daily Bible Connections - ${todayString} - ${bookChoice} (${translation})\n\n`;
+
     guessHistoryColors.forEach(rowColors => {
-        emojiText += rowColors.map(colorIndex => CATEGORY_EMOJIS[colorIndex]).join("") + "\n";
+        if (rowColors === "hint") {
+            emojiText += "💡\n";
+        } else {
+            emojiText += rowColors.map(colorIndex => CATEGORY_EMOJIS[colorIndex]).join("") + "\n";
+        }
     });
 
     const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
@@ -850,3 +1038,4 @@ function copyToClipboardFallback(text) {
         alert("Failed to copy results. You can manually select and copy:\n\n" + text);
     });
 }
+
