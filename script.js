@@ -139,8 +139,18 @@ function setupEventListeners() {
         randomFunc = Math.random; 
         startBoardGeneration();
     });
+
+    // How To Play modal: close button + click on dark backdrop
+    const howToModal = document.getElementById("how-to-modal");
+    document.getElementById("close-modal").addEventListener("click", () => {
+        howToModal.style.display = "none";
+    });
+    howToModal.addEventListener("click", (e) => {
+        if (e.target === howToModal) howToModal.style.display = "none";
+    });
     
     document.getElementById("how-to-play-btn").addEventListener("click", showHowToPlay);
+    
     
     const howToPlayBtn = document.getElementById("how-to-play-btn");
     if (howToPlayBtn) {
@@ -175,16 +185,7 @@ function setupEventListeners() {
 }
 
 function showHowToPlay() {
-    alert(
-        "HOW TO PLAY:\n\n" +
-        "• Find groups of 4 words sharing a common Bible verse.\n" +
-        "• Select 4 words and tap 'Submit' to guess.\n" +
-        "• You have 7 lives to solve the entire board.\n" +
-        "• Anchors represent a guaranteed word for each hidden verse.\n" +
-        "• Box colors mark Bible position (Yellow = earliest, Purple = latest).\n" +
-        "• Feel free to use a Bible, but don't use a search tool \n \n" +
-        "- Created by Matthew Kearney"
-    );
+    document.getElementById("how-to-modal").style.display = "flex";
 }
 
 // --- CORE UTILITIES ---
