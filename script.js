@@ -1030,7 +1030,7 @@ function shareResults() {
 
     guessHistoryColors.forEach(rowColors => {
         if (rowColors === "hint") {
-            emojiText += "💡\n";
+            emojiText += " ——💡——\n";
         } else {
             emojiText += rowColors.map(colorIndex => CATEGORY_EMOJIS[colorIndex]).join("") + "\n";
         }
