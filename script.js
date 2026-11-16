@@ -89,6 +89,7 @@ let jsonCache = {};
 let globalChapterWords = {};
 let hasFailedDailyBook = false; // Tracks if we had to swap out of a seeded book
 let currentHintRef = null; // Verse reference currently shown as a hint
+let hintUsed = false;      // Only one hint allowed per game
 
 // --- INITIALIZATION ---
 console.log("🔌 Script successfully loaded and connected to HTML!");
@@ -610,6 +611,8 @@ async function startBoardGeneration() {
         guessHistoryColors = [];
         pastGuesses.clear();
         currentHintRef = null;
+        hintUsed = false;
+        document.getElementById("hint-btn").disabled = false;
         isGameOver = false;
 
         document.getElementById("setup-screen").style.display = "none";
@@ -657,6 +660,7 @@ function saveDailyState() {
             guessHistoryColors,
             lives,
             currentHintRef,
+            hintUsed,
             isGameOver,
             won: gameWon
         };
@@ -716,6 +720,8 @@ function restoreDailyGame(state) {
     isGameOver = state.isGameOver;
     gameWon = state.won;
     currentHintRef = state.currentHintRef || null;
+    hintUsed = state.hintUsed || !!state.currentHintRef;
+    document.getElementById("hint-btn").disabled = hintUsed;
 
     const sortedRefs = buildColorMaps();
     updateGameTitle();
@@ -875,19 +881,34 @@ function submitGuess() {
 }
 
 // --- HINT SYSTEM ---
+// Same date => same ordering of a board's verses for every player
+function getHintOrder() {
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const epoch = new Date(2024, 0, 1);
+    const dayNumber = Math.round((today.getTime() - epoch.getTime()) / (1000 * 60 * 60 * 24));
+
+    const rng = mulberry32(cyrb128(`Hint-${dayNumber}`)[0]);
+
+    // Start from a canonical order so the result doesn't depend on object key order
+    const order = sortReferencesChronologically(Object.keys(boardCategories));
+    for (let i = order.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [order[i], order[j]] = [order[j], order[i]];
+    }
+    return order;
+}
+
 function giveHint() {
-    if (isGameOver) return;
+    if (isGameOver || hintUsed) return;
 
-    const remaining = Object.keys(boardCategories).filter(ref => !solvedCategories.includes(ref));
-    if (remaining.length === 0) return;
+    // First verse in the date-seeded order that hasn't been solved yet
+    const hintRef = getHintOrder().find(ref => !solvedCategories.includes(ref));
+    if (!hintRef) return;
 
-    // Nothing new to reveal if the only unsolved verse is already being shown
-    if (remaining.length === 1 && currentHintRef === remaining[0]) return;
-
-    // Prefer a different verse than the one currently displayed
-    let choices = remaining.filter(ref => ref !== currentHintRef);
-    if (choices.length === 0) choices = remaining;
-    currentHintRef = choices[Math.floor(Math.random() * choices.length)];
+    currentHintRef = hintRef;
+    hintUsed = true;
+    document.getElementById("hint-btn").disabled = true;
 
     guessHistoryColors.push("hint"); // Shows up as its own 💡 row when sharing
 
@@ -1038,4 +1059,3 @@ function copyToClipboardFallback(text) {
         alert("Failed to copy results. You can manually select and copy:\n\n" + text);
     });
 }
-
