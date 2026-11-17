@@ -162,6 +162,7 @@ function setupEventListeners() {
         
         howToPlayBtn.insertAdjacentElement('afterend', dailyBtn);
         dailyBtn.addEventListener("click", startDailyGame);
+        updateDailyButtonLabel();
     }
 
     document.getElementById("shuffle-btn").addEventListener("click", shuffleBoard);
@@ -425,16 +426,35 @@ function getCombinations(array, k) {
     return result;
 }
 
+function getTodayDayNumber() {
+    const now = new Date();
+    const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const epochLocal = new Date(2024, 0, 1);
+    return Math.floor((todayLocal.getTime() - epochLocal.getTime()) / (1000 * 60 * 60 * 24));
+}
+
+function updateDailyButtonLabel() {
+    const btn = document.getElementById("daily-game-btn");
+    if (!btn) return;
+
+    let label = "Play Daily Game";
+    try {
+        const raw = localStorage.getItem(`bibleConn_daily_${getTodayDayNumber()}`);
+        if (raw) {
+            const saved = JSON.parse(raw);
+            label = saved.isGameOver ? "View Daily Results" : "Resume Daily Game";
+        }
+    } catch (e) {}
+
+    btn.textContent = label;
+}
+
 function startDailyGame() {
     isDailyMode = true;
     hasFailedDailyBook = false;
     translation = document.getElementById("translation-select") ? document.getElementById("translation-select").value : "ESV";
 
-    const now = new Date();
-    const todayLocal = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const epochLocal = new Date(2024, 0, 1);
-
-    dailyDayNumber = Math.floor((todayLocal.getTime() - epochLocal.getTime()) / (1000 * 60 * 60 * 24));
+    dailyDayNumber = getTodayDayNumber();
 
     cleanupOldDailySaves();
 
