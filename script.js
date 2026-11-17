@@ -90,6 +90,8 @@ let globalChapterWords = {};
 let hasFailedDailyBook = false; // Tracks if we had to swap out of a seeded book
 let currentHintRef = null; // Verse reference currently shown as a hint
 let hintUsed = false;      // Only one hint allowed per game
+let failedDailyBooks = []; 
+
 
 // --- INITIALIZATION ---
 console.log("🔌 Script successfully loaded and connected to HTML!");
@@ -485,15 +487,23 @@ async function startBoardGeneration() {
 
     let success = false;
     let cycleIndex = 0;
-    
+    failedDailyBooks = []; 
+
     // In Daily mode, it will try up to 10 different books (cycles) before giving up entirely.
     const MAX_CYCLES = isDailyMode ? 10 : 1; 
 
     while (cycleIndex < MAX_CYCLES && !success) {
         
         // If we loop back up here and cycleIndex > 0, it means the previous book failed
+              // If we loop back up here and cycleIndex > 0, it means the previous book failed
         if (cycleIndex > 0) {
             hasFailedDailyBook = true;
+            // DEBUG: bookChoice still holds the book that just failed
+            failedDailyBooks.push(bookChoice);
+            console.warn(
+                `❌ Daily book failed: "${bookChoice}" (cycle ${cycleIndex - 1}, day ${dailyDayNumber}, ${translation}). ` +
+                `Falling back to cycle ${cycleIndex}.`
+            );
         }
         
         if (isDailyMode) {
