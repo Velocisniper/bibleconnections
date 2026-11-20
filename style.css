@@ -50,6 +50,7 @@ body {
 
 /* --- SETUP SCREEN ELEMENTS --- */
 h1 {
+    font-family: Georgia, serif;
     font-size: 32px;
     font-weight: bold;
     margin-top: 40px;
